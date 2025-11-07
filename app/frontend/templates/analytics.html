@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analytics - Seafood Forecasting</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .sidebar {
+            min-height: 100vh;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .sidebar .nav-link {
+            color: #fff;
+            padding: 15px 20px;
+            margin: 5px 0;
+            border-radius: 8px;
+        }
+        .sidebar .nav-link:hover, .sidebar .nav-link.active {
+            background: rgba(255,255,255,0.1);
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="row">
+            <!-- Sidebar -->
+            <div class="col-md-2 sidebar p-0">
+                <div class="p-4">
+                    <h4 class="text-white mb-4">
+                        <i class="fas fa-fish me-2"></i>Seafood Forecast
+                    </h4>
+                    <ul class="nav flex-column">
+                        <li class="nav-item">
+                            <a class="nav-link" href="/dashboard">
+                                <i class="fas fa-tachometer-alt me-2"></i>Dashboard
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="/forecast-page">
+                                <i class="fas fa-chart-line me-2"></i>Demand Forecast
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link active" href="/analytics">
+                                <i class="fas fa-chart-bar me-2"></i>Analytics
+                            </a>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Main Content -->
+            <div class="col-md-10">
+                <div class="p-4">
+                    <h2 class="mb-4">Analytics & Insights</h2>
+                    
+                    <div class="alert alert-info">
+                        <h4>📊 Analytics Dashboard Coming Soon</h4>
+                        <p>This section will provide detailed analytics including:</p>
+                        <ul>
+                            <li>Demand patterns and seasonality</li>
+                            <li>Product performance metrics</li>
+                            <li>Center-wise performance</li>
+                            <li>Forecast accuracy tracking</li>
+                            <li>Inventory optimization insights</li>
+                        </ul>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="card">
+                                <div class="card-body">
+                                    <h5 class="card-title">Quick Stats</h5>
+                                    <p><strong>Models Available:</strong> XGBoost, LightGBM</p>
+                                    <p><strong>Forecast Horizon:</strong> 30 days</p>
+                                    <p><strong>Data Coverage:</strong> Multiple centers & products</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="card">
+                                <div class="card-body">
+                                    <h5 class="card-title">System Status</h5>
+                                    <p><span class="badge bg-success">Operational</span> Forecasting Engine</p>
+                                    <p><span class="badge bg-success">Ready</span> API Endpoints</p>
+                                    <p><span class="badge bg-success">Active</span> Web Interface</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
