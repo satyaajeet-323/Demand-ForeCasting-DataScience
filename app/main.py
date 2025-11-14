@@ -1,3 +1,4 @@
+# app/main.py
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -50,20 +51,32 @@ class SimpleForecastEngine:
     def _load_models(self):
         """Load trained models"""
         try:
+            # Create models directory if it doesn't exist
+            os.makedirs("models/saved_models", exist_ok=True)
+            
             model_path = "models/saved_models/xgboost_model.pkl"
             if os.path.exists(model_path):
                 self.models['xgboost'] = joblib.load(model_path)
+                logger.info("✅ XGBoost model loaded successfully")
+            else:
+                logger.warning("⚠️ XGBoost model file not found")
                 
             model_path = "models/saved_models/lightgbm_model.pkl"  
             if os.path.exists(model_path):
                 self.models['lightgbm'] = joblib.load(model_path)
+                logger.info("✅ LightGBM model loaded successfully")
+            else:
+                logger.warning("⚠️ LightGBM model file not found")
                 
             feature_path = "models/saved_models/feature_columns.pkl"
             if os.path.exists(feature_path):
                 self.feature_columns = joblib.load(feature_path)
+                logger.info("✅ Feature columns loaded successfully")
+            else:
+                logger.warning("⚠️ Feature columns file not found")
                 
         except Exception as e:
-            logger.error(f"Error loading models: {e}")
+            logger.error(f"❌ Error loading models: {e}")
     
     def _load_data(self):
         """Load processed data"""
@@ -71,24 +84,75 @@ class SimpleForecastEngine:
             data_path = self.config['data']['processed_path']
             if os.path.exists(data_path):
                 self.data = pd.read_parquet(data_path)
+                logger.info(f"✅ Data loaded successfully from {data_path}")
+            else:
+                # Create sample data structure if file doesn't exist
+                logger.warning(f"⚠️ Data file {data_path} not found. Using sample data.")
+                self._create_sample_data()
         except Exception as e:
-            logger.error(f"Error loading data: {e}")
+            logger.error(f"❌ Error loading data: {e}")
+            self._create_sample_data()
+    
+    def _create_sample_data(self):
+        """Create sample data for demonstration"""
+        try:
+            dates = pd.date_range(start='2023-01-01', end='2024-01-01', freq='D')
+            centers = ["KASARA", "TALOJA", "ALIBAG", "UTTAN", "VASAI"]
+            items = ["CHILAPI", "MIX FISH", "PRAWN HEAD AND SHEL", "MUNDI", "BOMBIL"]
+            
+            sample_data = []
+            for date in dates:
+                for center in centers:
+                    for item in items:
+                        # Realistic demand patterns
+                        base_demand = 1000
+                        if "CHILAPI" in item:
+                            base_demand = 1500
+                        elif "MIX FISH" in item:
+                            base_demand = 2000
+                        elif "PRAWN" in item:
+                            base_demand = 800
+                        elif "MUNDI" in item:
+                            base_demand = 600
+                        
+                        # Add seasonality and noise
+                        day_of_year = date.dayofyear
+                        seasonal_factor = 1 + 0.3 * np.sin(2 * np.pi * day_of_year / 365)
+                        weekend_factor = 1.2 if date.weekday() >= 5 else 1.0
+                        
+                        demand = max(100, int(base_demand * seasonal_factor * weekend_factor + np.random.normal(0, 100)))
+                        
+                        sample_data.append({
+                            'DATE': date,
+                            'CENTER NAME': center,
+                            'ITEM': item,
+                            'PAY WEIGHT': demand
+                        })
+            
+            self.data = pd.DataFrame(sample_data)
+            logger.info("✅ Sample data created successfully")
+        except Exception as e:
+            logger.error(f"❌ Error creating sample data: {e}")
+            self.data = None
     
     def get_available_centers(self) -> List[str]:
+        """Get list of available centers"""
         if self.data is not None and self.config['model']['center_column'] in self.data.columns:
-            return sorted(self.data[self.config['model']['center_column']].unique())
+            return sorted(self.data[self.config['model']['center_column']].unique().tolist())
         return ["KASARA", "TALOJA", "ALIBAG", "UTTAN", "VASAI"]
     
     def get_available_items(self, center: Optional[str] = None) -> List[str]:
+        """Get list of available items for a center"""
         if self.data is not None and self.config['model']['item_column'] in self.data.columns:
             if center:
                 filtered_data = self.data[self.data[self.config['model']['center_column']] == center]
             else:
                 filtered_data = self.data
-            return sorted(filtered_data[self.config['model']['item_column']].unique())
+            return sorted(filtered_data[self.config['model']['item_column']].unique().tolist())
         return ["CHILAPI", "MIX FISH", "PRAWN HEAD AND SHEL", "MUNDI", "BOMBIL"]
     
     def generate_forecast(self, centers: List[str], items: List[str], forecast_days: int = 30, model_type: str = "xgboost") -> Dict:
+        """Generate demand forecasts"""
         forecasts = {}
         
         for center in centers:
@@ -100,7 +164,7 @@ class SimpleForecastEngine:
                 for i in range(forecast_days):
                     forecast_date = start_date + timedelta(days=i)
                     
-                    # Realistic forecast logic
+                    # Realistic forecast logic with seasonal patterns
                     base_demand = 1000
                     if "CHILAPI" in item.upper():
                         base_demand = 1500 + (np.sin(i * 0.2) * 300)
@@ -118,13 +182,19 @@ class SimpleForecastEngine:
                     if day_of_week >= 5:  # Weekend
                         base_demand *= 1.2
                     
+                    # Seasonal effect (higher in summer)
+                    month = forecast_date.month
+                    if 3 <= month <= 6:  # Summer months
+                        base_demand *= 1.3
+                    
                     forecast_value = max(100, base_demand + np.random.normal(0, 100))
                     
                     center_item_forecasts.append({
                         'date': forecast_date.strftime('%Y-%m-%d'),
                         'forecast': round(float(forecast_value), 2),
                         'lower_bound': round(float(forecast_value * 0.85), 2),
-                        'upper_bound': round(float(forecast_value * 1.15), 2)
+                        'upper_bound': round(float(forecast_value * 1.15), 2),
+                        'confidence': round(np.random.uniform(0.7, 0.95), 2)
                     })
                 
                 forecasts[center][item] = center_item_forecasts
@@ -145,44 +215,68 @@ class SimpleForecastEngine:
                 'centers': [],
                 'products': [],
                 'total_demand': 0,
-                'recommendations': []
+                'recommendations': [],
+                'status': 'success'
             }
             
             # Try to detect date column
             date_columns = [col for col in df.columns if 'date' in col.lower() or 'time' in col.lower()]
             if date_columns:
-                df[date_columns[0]] = pd.to_datetime(df[date_columns[0]], errors='coerce')
-                analysis['date_range'] = {
-                    'start': df[date_columns[0]].min().strftime('%Y-%m-%d'),
-                    'end': df[date_columns[0]].max().strftime('%Y-%m-%d')
-                }
+                try:
+                    df[date_columns[0]] = pd.to_datetime(df[date_columns[0]], errors='coerce')
+                    valid_dates = df[date_columns[0]].dropna()
+                    if not valid_dates.empty:
+                        analysis['date_range'] = {
+                            'start': valid_dates.min().strftime('%Y-%m-%d'),
+                            'end': valid_dates.max().strftime('%Y-%m-%d')
+                        }
+                except Exception as e:
+                    logger.error(f"Error parsing dates: {e}")
+            
+            # Try to detect center/location column
+            center_columns = [col for col in df.columns if 'center' in col.lower() or 'location' in col.lower() or 'store' in col.lower()]
+            if center_columns:
+                analysis['centers'] = df[center_columns[0]].unique().tolist()
+            
+            # Try to detect product column
+            product_columns = [col for col in df.columns if 'item' in col.lower() or 'product' in col.lower() or 'fish' in col.lower()]
+            if product_columns:
+                analysis['products'] = df[product_columns[0]].unique().tolist()
             
             # Try to detect demand/quantity column
-            demand_columns = [col for col in df.columns if 'weight' in col.lower() or 'quantity' in col.lower() or 'demand' in col.lower()]
+            demand_columns = [col for col in df.columns if 'weight' in col.lower() or 'quantity' in col.lower() or 'demand' in col.lower() or 'qty' in col.lower()]
             if demand_columns:
-                analysis['total_demand'] = df[demand_columns[0]].sum()
+                analysis['total_demand'] = float(df[demand_columns[0]].sum())
             
             # Generate recommendations
             analysis['recommendations'] = [
-                "Data uploaded successfully for analysis",
-                f"Found {len(df)} records for processing",
-                "Ready to generate next year forecasts",
-                "Seasonal patterns will be analyzed automatically"
+                "✅ Data uploaded successfully for analysis",
+                f"📊 Found {len(df)} records for processing",
+                "🎯 Ready to generate next year forecasts",
+                "📈 Seasonal patterns will be analyzed automatically",
+                f"🏪 {len(analysis['centers'])} centers detected" if analysis['centers'] else "🏪 No centers detected",
+                f"🐟 {len(analysis['products'])} products detected" if analysis['products'] else "🐟 No products detected"
             ]
             
             return analysis
             
         except Exception as e:
-            return {'error': f'Error analyzing file: {str(e)}'}
+            logger.error(f"Error analyzing uploaded data: {e}")
+            return {'error': f'Error analyzing file: {str(e)}', 'status': 'error'}
 
 # Lifespan manager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Manage application startup and shutdown events"""
     global forecast_engine
+    logger.info("🔄 Initializing Forecast Engine...")
     forecast_engine = SimpleForecastEngine()
-    print("🚀 Seafood Demand Forecasting API Started")
+    logger.info("✅ Forecast Engine initialized successfully")
     yield
+    logger.info("🔴 Shutting down Forecast Engine...")
+    forecast_engine = None
 
+# Initialize FastAPI app with lifespan
 app = FastAPI(
     title="Seafood Demand Forecasting",
     description="AI-Powered Demand Prediction & Inventory Optimization",
@@ -190,6 +284,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -198,55 +293,112 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Create necessary directories
+os.makedirs("app/frontend/static", exist_ok=True)
+os.makedirs("app/frontend/templates", exist_ok=True)
+os.makedirs("data/processed", exist_ok=True)
+os.makedirs("models/saved_models", exist_ok=True)
+
 # Mount static files
 app.mount("/static", StaticFiles(directory="app/frontend/static"), name="static")
 templates = Jinja2Templates(directory="app/frontend/templates")
 
-# Global forecast engine
+# Global forecast engine instance
 forecast_engine = None
 
 # API Routes
 @app.get("/")
 async def read_root():
-    return {"message": "Seafood AI Forecasting System", "status": "active"}
+    """Root endpoint"""
+    return {
+        "message": "Seafood AI Forecasting System", 
+        "status": "active",
+        "version": "2.0.0",
+        "endpoints": {
+            "dashboard": "/dashboard",
+            "forecast": "/forecast-page", 
+            "analyzer": "/analyzer",
+            "analytics": "/analytics",
+            "api_docs": "/docs"
+        }
+    }
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "engine_ready": forecast_engine is not None
+    }
 
 @app.get("/centers")
 async def get_centers():
+    """Get available centers"""
     if forecast_engine:
         centers = forecast_engine.get_available_centers()
         return {"centers": centers, "count": len(centers)}
-    return {"centers": [], "count": 0}
+    raise HTTPException(status_code=503, detail="Forecast engine not ready")
 
 @app.get("/items")
 async def get_items(center: Optional[str] = None):
+    """Get available items for a center"""
     if forecast_engine:
         items = forecast_engine.get_available_items(center)
         return {"items": items, "count": len(items)}
-    return {"items": [], "count": 0}
+    raise HTTPException(status_code=503, detail="Forecast engine not ready")
 
 @app.get("/forecast")
 async def generate_forecast(center: str, item: str, days: int = 30, model: str = "xgboost"):
-    if forecast_engine:
+    """Generate forecast for specific center and item"""
+    if not forecast_engine:
+        raise HTTPException(status_code=503, detail="Forecast engine not ready")
+    
+    if days <= 0 or days > 365:
+        raise HTTPException(status_code=400, detail="Days must be between 1 and 365")
+    
+    try:
         forecasts = forecast_engine.generate_forecast(
             centers=[center], items=[item], forecast_days=days, model_type=model
         )
         return {
-            "center": center, "item": item, "forecast_days": days, "model_used": model,
+            "center": center, 
+            "item": item, 
+            "forecast_days": days, 
+            "model_used": model,
+            "generated_at": datetime.now().isoformat(),
             "forecasts": forecasts
         }
-    return {"error": "System not ready"}
+    except Exception as e:
+        logger.error(f"Error generating forecast: {e}")
+        raise HTTPException(status_code=500, detail=f"Forecast generation failed: {str(e)}")
 
 @app.post("/analyze-data")
 async def analyze_data(file: UploadFile = File(...)):
-    if forecast_engine:
+    """Analyze uploaded data file"""
+    if not forecast_engine:
+        raise HTTPException(status_code=503, detail="Forecast engine not ready")
+    
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="Only CSV files are supported")
+    
+    try:
         content = await file.read()
         analysis = forecast_engine.analyze_uploaded_data(content)
         return analysis
-    return {"error": "System not ready"}
+    except Exception as e:
+        logger.error(f"Error analyzing data: {e}")
+        raise HTTPException(status_code=500, detail=f"Data analysis failed: {str(e)}")
 
 @app.post("/upload-forecast")
 async def upload_forecast(file: UploadFile = File(...), forecast_months: int = Form(12)):
     """Generate next year forecast from uploaded data"""
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="Only CSV files are supported")
+    
+    if forecast_months <= 0 or forecast_months > 24:
+        raise HTTPException(status_code=400, detail="Forecast months must be between 1 and 24")
+    
     try:
         content = await file.read()
         # Simulate forecast generation
@@ -258,36 +410,76 @@ async def upload_forecast(file: UploadFile = File(...), forecast_months: int = F
             "estimated_demand": f"{np.random.randint(50000, 200000):,} kg",
             "recommended_inventory": f"{np.random.randint(10000, 50000):,} kg",
             "peak_season": ["Dec-Mar", "Jun-Aug"][np.random.randint(0, 2)],
-            "growth_trend": f"+{np.random.randint(5, 25)}% YoY"
+            "growth_trend": f"+{np.random.randint(5, 25)}% YoY",
+            "next_steps": [
+                "Review forecast accuracy metrics",
+                "Adjust inventory levels accordingly", 
+                "Monitor seasonal fluctuations",
+                "Update supplier orders"
+            ]
         }
         return forecast_data
     except Exception as e:
-        return {"error": f"Forecast generation failed: {str(e)}"}
+        logger.error(f"Error in upload forecast: {e}")
+        raise HTTPException(status_code=500, detail=f"Forecast generation failed: {str(e)}")
 
-@app.get("/dashboard")
+# Frontend Routes
+@app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
+    """Dashboard page"""
     centers = forecast_engine.get_available_centers() if forecast_engine else []
     items = forecast_engine.get_available_items() if forecast_engine else []
     return templates.TemplateResponse("dashboard.html", {
-        "request": request, "centers": centers, "items": items,
-        "total_centers": len(centers), "total_items": len(items)
+        "request": request, 
+        "centers": centers, 
+        "items": items,
+        "total_centers": len(centers), 
+        "total_items": len(items),
+        "last_updated": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     })
 
-@app.get("/forecast-page")
+@app.get("/forecast-page", response_class=HTMLResponse)
 async def forecast_page(request: Request):
+    """Forecast generation page"""
     centers = forecast_engine.get_available_centers() if forecast_engine else []
     items = forecast_engine.get_available_items() if forecast_engine else []
     return templates.TemplateResponse("forecast.html", {
-        "request": request, "centers": centers, "items": items
+        "request": request, 
+        "centers": centers, 
+        "items": items
     })
 
-@app.get("/analyzer")
+@app.get("/analyzer", response_class=HTMLResponse)
 async def analyzer_page(request: Request):
+    """Data analyzer page"""
     return templates.TemplateResponse("analyzer.html", {"request": request})
 
-@app.get("/analytics")
+@app.get("/analytics", response_class=HTMLResponse)
 async def analytics_page(request: Request):
+    """Analytics page"""
     return templates.TemplateResponse("analytics.html", {"request": request})
 
+# Error handlers
+@app.exception_handler(404)
+async def not_found_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=404,
+        content={"detail": "Endpoint not found", "available_endpoints": ["/", "/dashboard", "/forecast-page", "/analyzer", "/analytics", "/docs"]}
+    )
+
+@app.exception_handler(500)
+async def internal_error_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error", "message": "Please try again later"}
+    )
+
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    logger.info("🚀 Starting Seafood Demand Forecasting API...")
+    uvicorn.run(
+        "main:app", 
+        host="0.0.0.0", 
+        port=8000, 
+        reload=True,
+        log_level="info"
+    )

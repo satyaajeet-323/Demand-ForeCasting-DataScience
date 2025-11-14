@@ -1,5 +1,5 @@
 {
-  "training_date": "2025-11-08T00:22:05.125491",
+  "training_date": "2025-11-14T21:58:47.906144",
   "models_trained": [
     "xgboost",
     "lightgbm"
