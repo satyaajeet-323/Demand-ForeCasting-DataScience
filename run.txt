@@ -6,3 +6,9 @@ python run.py
 
 
 python scripts/deploy_model.py
+
+
+
+
+python -m venv seafood_env
+seafood_env\Scripts\activate
