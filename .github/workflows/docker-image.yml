@@ -70,7 +70,7 @@ jobs:
       git add .
       git commit -m "Auto-format code with Black and isort" || exit 0
       git push
-      
+
   unit-tests:
     name: Run Unit Tests
     runs-on: ubuntu-latest
