@@ -1,6 +1,8 @@
-from pydantic import BaseModel
-from typing import Dict, List, Optional
 from datetime import date
+from typing import Dict, List, Optional
+
+from pydantic import BaseModel
+
 
 class ForecastPoint(BaseModel):
     date: date
@@ -8,11 +10,13 @@ class ForecastPoint(BaseModel):
     lower_bound: float
     upper_bound: float
 
+
 class CenterItemForecast(BaseModel):
     center: str
     item: str
     forecasts: List[ForecastPoint]
     historical: List[Dict]
+
 
 class InventoryRecommendation(BaseModel):
     recommended_order: float

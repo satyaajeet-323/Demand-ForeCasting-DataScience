@@ -36,11 +36,11 @@ jobs:
         
     - name: Check code formatting with black
       run: |
-        black --check app/ scripts/ tests/
+        black --check app/ scripts/ tests/ --line-length 127
         
     - name: Check import sorting with isort
       run: |
-        isort --check-only app/ scripts/ tests/
+        isort --check-only app/ scripts/ tests/ --line-length 127
         
     - name: Lint with flake8
       run: |
