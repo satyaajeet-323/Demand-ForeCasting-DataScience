@@ -332,7 +332,6 @@ EOF
 
   cleanup:
     runs-on: ubuntu-latest
-    needs: [deploy-production, performance-test]
     if: always()
 
     steps:
