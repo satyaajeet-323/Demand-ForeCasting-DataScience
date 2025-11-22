@@ -1,9 +1,7 @@
 # app/main.py
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from fastapi import Request
 from contextlib import asynccontextmanager
 import uvicorn
@@ -294,14 +292,8 @@ app.add_middleware(
 )
 
 # Create necessary directories
-os.makedirs("app/frontend/static", exist_ok=True)
-os.makedirs("app/frontend/templates", exist_ok=True)
 os.makedirs("data/processed", exist_ok=True)
 os.makedirs("models/saved_models", exist_ok=True)
-
-# Mount static files
-app.mount("/static", StaticFiles(directory="app/frontend/static"), name="static")
-templates = Jinja2Templates(directory="app/frontend/templates")
 
 # Global forecast engine instance
 forecast_engine = None
@@ -315,11 +307,12 @@ async def read_root():
         "status": "active",
         "version": "2.0.0",
         "endpoints": {
-            "dashboard": "/dashboard",
-            "forecast": "/forecast-page", 
-            "analyzer": "/analyzer",
-            "analytics": "/analytics",
-            "api_docs": "/docs"
+            "streamlit_dashboard": "http://localhost:8501",
+            "api_docs": "/docs",
+            "health": "/health",
+            "forecast": "/forecast",
+            "centers": "/centers",
+            "items": "/items"
         }
     }
 
@@ -423,48 +416,21 @@ async def upload_forecast(file: UploadFile = File(...), forecast_months: int = F
         logger.error(f"Error in upload forecast: {e}")
         raise HTTPException(status_code=500, detail=f"Forecast generation failed: {str(e)}")
 
-# Frontend Routes
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(request: Request):
-    """Dashboard page"""
-    centers = forecast_engine.get_available_centers() if forecast_engine else []
-    items = forecast_engine.get_available_items() if forecast_engine else []
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request, 
-        "centers": centers, 
-        "items": items,
-        "total_centers": len(centers), 
-        "total_items": len(items),
-        "last_updated": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    })
-
-@app.get("/forecast-page", response_class=HTMLResponse)
-async def forecast_page(request: Request):
-    """Forecast generation page"""
-    centers = forecast_engine.get_available_centers() if forecast_engine else []
-    items = forecast_engine.get_available_items() if forecast_engine else []
-    return templates.TemplateResponse("forecast.html", {
-        "request": request, 
-        "centers": centers, 
-        "items": items
-    })
-
-@app.get("/analyzer", response_class=HTMLResponse)
-async def analyzer_page(request: Request):
-    """Data analyzer page"""
-    return templates.TemplateResponse("analyzer.html", {"request": request})
-
-@app.get("/analytics", response_class=HTMLResponse)
-async def analytics_page(request: Request):
-    """Analytics page"""
-    return templates.TemplateResponse("analytics.html", {"request": request})
+# Frontend Routes - Redirect to Streamlit
+@app.get("/dashboard")
+async def dashboard():
+    """Redirect to Streamlit dashboard"""
+    return {
+        "message": "Streamlit dashboard is available at http://localhost:8501",
+        "dashboard_url": "http://localhost:8501"
+    }
 
 # Error handlers
 @app.exception_handler(404)
 async def not_found_handler(request: Request, exc: HTTPException):
     return JSONResponse(
         status_code=404,
-        content={"detail": "Endpoint not found", "available_endpoints": ["/", "/dashboard", "/forecast-page", "/analyzer", "/analytics", "/docs"]}
+        content={"detail": "Endpoint not found", "available_endpoints": ["/", "/health", "/forecast", "/centers", "/items", "/docs"], "dashboard": "http://localhost:8501"}
     )
 
 @app.exception_handler(500)

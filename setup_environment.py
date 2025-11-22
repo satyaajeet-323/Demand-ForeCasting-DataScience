@@ -8,7 +8,7 @@ def check_and_install_packages():
     required_packages = [
         'fastapi', 'uvicorn', 'pandas', 'numpy', 'scikit-learn',
         'xgboost', 'lightgbm', 'prophet', 'statsmodels', 'mlflow',
-        'plotly', 'dash', 'sqlalchemy', 'jinja2', 'pytest', 'pyyaml', 'joblib'
+        'plotly', 'streamlit', 'sqlalchemy', 'jinja2', 'pytest', 'pyyaml', 'joblib'
     ]
     
     for package in required_packages:
@@ -26,14 +26,11 @@ def create_directory_structure():
         'data/processed', 
         'data/external',
         'models/saved_models',
-        'app/frontend/static/css',
-        'app/frontend/static/js',
-        'app/frontend/static/images',
-        'app/frontend/templates',
         'app/api',
         'tests',
         'monitoring',
-        'config'
+        'config',
+        'results'
     ]
     
     for directory in directories:
@@ -73,5 +70,7 @@ if __name__ == "__main__":
     print("\nNext steps:")
     print("1. Run: python scripts/data_pipeline.py")
     print("2. Run: python scripts/train_model.py") 
-    print("3. Run: python scripts/deploy_model.py")
-    print("4. Run: python app/main.py")
+    print("3. Run: streamlit run app/dashboard.py")
+    print("4. Run: python -m uvicorn app.main:app --host 0.0.0.0 --port 8000")
+    print("\n🌐 Streamlit Dashboard: http://localhost:8501")
+    print("🌐 FastAPI API: http://localhost:8000/docs")

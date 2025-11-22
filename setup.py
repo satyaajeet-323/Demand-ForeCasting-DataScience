@@ -28,12 +28,9 @@ def main():
         "data/processed", 
         "data/external",
         "models/saved_models",
-        "app/frontend/static/css",
-        "app/frontend/static/js",
-        "app/frontend/static/images",
-        "app/frontend/templates",
         "tests",
-        "monitoring"
+        "monitoring",
+        "results"
     ]
     
     for directory in directories:
@@ -44,7 +41,10 @@ def main():
     print("1. Place your CSV file in data/raw/")
     print("2. Run: python scripts/data_pipeline.py")
     print("3. Run: python scripts/train_model.py")
-    print("4. Run: python app/main.py")
+    print("4. Run: streamlit run app/dashboard.py")
+    print("5. Run: python -m uvicorn app.main:app --host 0.0.0.0 --port 8000")
+    print("\n🌐 Streamlit Dashboard: http://localhost:8501")
+    print("🌐 FastAPI API: http://localhost:8000/docs")
 
 if __name__ == "__main__":
     main()

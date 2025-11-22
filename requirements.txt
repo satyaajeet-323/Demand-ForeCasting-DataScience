@@ -9,8 +9,8 @@ prophet
 statsmodels
 mlflow
 plotly
-dash
-dash-bootstrap-components
+streamlit
+pyyaml
 sqlalchemy
 python-multipart
 jinja2
@@ -19,3 +19,4 @@ pytest
 alembic
 psycopg2-binary
 setuptools
+joblib

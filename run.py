@@ -59,11 +59,7 @@ def main():
         "data/processed", 
         "data/external",
         "models/saved_models",
-        "results",
-        "app/frontend/static/css",
-        "app/frontend/static/js",
-        "app/frontend/static/images",
-        "app/frontend/templates"
+        "results"
     ]
     
     for directory in directories:
@@ -96,11 +92,12 @@ def main():
         # Start the FastAPI server
         import uvicorn
         
-        print("[INFO] Starting web server...")
-        print("[INFO] Application will be available at: http://localhost:8000")
+        print("[INFO] Starting services...")
+        print("[INFO] FastAPI API will be available at: http://localhost:8000")
         print("[INFO] API documentation at: http://localhost:8000/docs")
-        print("[INFO] Dashboard at: http://localhost:8000/dashboard")
-        print("[INFO] Press Ctrl+C to stop the server")
+        print("[INFO] Streamlit Dashboard at: http://localhost:8501")
+        print("[INFO] Press Ctrl+C to stop the servers")
+        print("\n[INFO] To start Streamlit dashboard separately, run: streamlit run app/dashboard.py")
         
         uvicorn.run("app.main:app", host="0.0.0.0", port=8000, log_level="info")
         

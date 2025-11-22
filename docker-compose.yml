@@ -48,7 +48,8 @@ services:
   web:
     build: .
     ports:
-      - "8000:8000"
+      - "8000:8000"  # FastAPI
+      - "8501:8501"  # Streamlit
     environment:
       - ENVIRONMENT=development
       - DATABASE_URL=postgresql://postgres:password@postgres:5432/seafood_db
