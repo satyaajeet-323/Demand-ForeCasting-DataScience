@@ -1164,12 +1164,16 @@ elif page == "Data Analyzer":
                 )
 
                 if st.button("Generate Next Year Forecast", key="uploaded_forecast_btn"):
-                    if uploaded_df is None or uploaded_df.empty:
+                    data_source = uploaded_df
+                    if (data_source is None or data_source.empty) and "uploaded_dataset" in st.session_state:
+                        data_source = st.session_state.get("uploaded_dataset")
+
+                    if data_source is None or data_source.empty:
                         st.warning("The uploaded dataset is empty or unreadable. Please upload a valid CSV file.")
                     else:
                         with st.spinner("Generating forecast from uploaded data..."):
                             forecast_records = forecast_engine.generate_forecast_from_uploaded_data(
-                                uploaded_df, forecast_months
+                                data_source, forecast_months
                             )
 
                             if forecast_records:

@@ -238,27 +238,32 @@ jobs:
       - name: Validate model config file (if exists)
         run: |
           python - <<'PY'
-import os, yaml, sys
-cfg = 'config/model_config.yaml'
-if os.path.exists(cfg):
-    with open(cfg) as f:
-        yaml.safe_load(f)
-    print("Model config loaded OK")
-else:
-    print("No model_config.yaml found - skipping")
-PY
+          import os
+          import yaml
+
+          cfg = 'config/model_config.yaml'
+          if os.path.exists(cfg):
+              with open(cfg) as f:
+                  yaml.safe_load(f)
+              print("Model config loaded OK")
+          else:
+              print("No model_config.yaml found - skipping")
+          PY
 
       - name: Smoke-run data processor import (if present)
         run: |
           python - <<'PY'
-import sys, os
-sys.path.append('scripts')
-try:
-    import data_pipeline
-    print("data_pipeline import OK")
-except Exception as e:
-    print("data_pipeline import failed (optional):", e)
-PY
+          import sys
+          import importlib
+
+          sys.path.append('scripts')
+
+          try:
+              import data_pipeline  # noqa: F401
+              print("data_pipeline import OK")
+          except Exception as exc:
+              print("data_pipeline import failed (optional):", exc)
+          PY
 
       - name: Run training in test mode (if script supports --test-mode)
         run: |
