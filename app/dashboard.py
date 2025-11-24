@@ -14,6 +14,7 @@ import yaml
 import joblib
 import io
 import logging
+from pandas.tseries.offsets import MonthBegin
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -82,23 +83,23 @@ except ImportError:
                     model_path = os.path.join(models_dir, "xgboost_model.pkl")
                     if os.path.exists(model_path):
                         self.models["xgboost"] = joblib.load(model_path)
-                        logger.info("✅ XGBoost model loaded successfully")
+                        logger.info("XGBoost model loaded successfully")
                     else:
-                        logger.warning("⚠️ XGBoost model file not found")
+                        logger.warning("XGBoost model file not found")
 
                     model_path = os.path.join(models_dir, "lightgbm_model.pkl")
                     if os.path.exists(model_path):
                         self.models["lightgbm"] = joblib.load(model_path)
-                        logger.info("✅ LightGBM model loaded successfully")
+                        logger.info("LightGBM model loaded successfully")
                     else:
-                        logger.warning("⚠️ LightGBM model file not found")
+                        logger.warning("LightGBM model file not found")
 
                     feature_path = os.path.join(models_dir, "feature_columns.pkl")
                     if os.path.exists(feature_path):
                         self.feature_columns = joblib.load(feature_path)
-                        logger.info("✅ Feature columns loaded successfully")
+                        logger.info("Feature columns loaded successfully")
                 except Exception as e:
-                    logger.error(f"❌ Error loading models: {e}")
+                    logger.error(f"Error loading models: {e}")
 
             def _load_data(self):
                 """Load processed data"""
@@ -106,12 +107,12 @@ except ImportError:
                     data_path = self.config["data"]["processed_path"]
                     if os.path.exists(data_path):
                         self.data = pd.read_parquet(data_path)
-                        logger.info(f"✅ Data loaded successfully from {data_path}")
+                        logger.info(f"Data loaded successfully from {data_path}")
                     else:
-                        logger.warning(f"⚠️ Data file {data_path} not found. Using sample data.")
+                        logger.warning(f"Data file {data_path} not found. Using sample data.")
                         self._create_sample_data()
                 except Exception as e:
-                    logger.error(f"❌ Error loading data: {e}")
+                    logger.error(f"Error loading data: {e}")
                     self._create_sample_data()
 
             def _create_sample_data(self):
@@ -146,9 +147,9 @@ except ImportError:
                                 sample_data.append({"DATE": date, "CENTER NAME": center, "ITEM": item, "PAY WEIGHT": demand})
 
                     self.data = pd.DataFrame(sample_data)
-                    logger.info("✅ Sample data created successfully")
+                    logger.info("Sample data created successfully")
                 except Exception as e:
-                    logger.error(f"❌ Error creating sample data: {e}")
+                    logger.error(f"Error creating sample data: {e}")
                     self.data = None
 
             def get_available_centers(self):
@@ -216,6 +217,113 @@ except ImportError:
 
                 return forecasts
 
+            def generate_forecast_from_uploaded_data(self, df, forecast_months=12):
+                """Generate aggregated forecast from uploaded CSV data"""
+                if df is None or df.empty:
+                    return []
+
+                working_df = df.copy()
+
+                date_columns = [
+                    col
+                    for col in working_df.columns
+                    if "date" in col.lower() or "time" in col.lower()
+                ]
+                demand_columns = [
+                    col
+                    for col in working_df.columns
+                    if "weight" in col.lower()
+                    or "quantity" in col.lower()
+                    or "demand" in col.lower()
+                    or "qty" in col.lower()
+                ]
+                center_columns = [
+                    col
+                    for col in working_df.columns
+                    if "center" in col.lower() or "location" in col.lower() or "store" in col.lower()
+                ]
+                item_columns = [
+                    col
+                    for col in working_df.columns
+                    if "item" in col.lower() or "product" in col.lower() or "fish" in col.lower()
+                ]
+
+                date_col = date_columns[0] if date_columns else None
+                demand_col = demand_columns[0] if demand_columns else None
+                center_col = center_columns[0] if center_columns else None
+                item_col = item_columns[0] if item_columns else None
+
+                if demand_col is None:
+                    return []
+
+                if date_col is None:
+                    working_df["__generated_date"] = pd.date_range(
+                        start=datetime.now() - timedelta(days=len(working_df)),
+                        periods=len(working_df),
+                        freq="D",
+                    )
+                    date_col = "__generated_date"
+
+                working_df[date_col] = pd.to_datetime(working_df[date_col], errors="coerce")
+                working_df = working_df.dropna(subset=[date_col])
+
+                if working_df.empty:
+                    return []
+
+                if center_col is None:
+                    working_df["__center"] = "All Locations"
+                    center_col = "__center"
+
+                if item_col is None:
+                    working_df["__item"] = "All Products"
+                    item_col = "__item"
+
+                working_df = working_df[[date_col, center_col, item_col, demand_col]].copy()
+                working_df["Month"] = working_df[date_col].dt.to_period("M").dt.to_timestamp()
+
+                grouped = (
+                    working_df.groupby([center_col, item_col, "Month"])[demand_col]
+                    .sum()
+                    .reset_index()
+                )
+
+                if grouped.empty:
+                    return []
+
+                records = []
+                for (center, item), subset in grouped.groupby([center_col, item_col]):
+                    subset = subset.sort_values("Month")
+                    baseline = subset[demand_col].tail(3).mean()
+                    if pd.isna(baseline):
+                        baseline = subset[demand_col].mean()
+                    if pd.isna(baseline) or baseline <= 0:
+                        baseline = max(subset[demand_col].median(), 1)
+
+                    last_month = subset["Month"].max()
+                    future_months = pd.date_range(
+                        last_month + MonthBegin(),
+                        periods=forecast_months,
+                        freq="MS",
+                    )
+
+                    for idx, month in enumerate(future_months):
+                        seasonality = 1 + 0.12 * np.sin((idx / 12) * 2 * np.pi)
+                        trend = 1 + 0.015 * idx
+                        forecast_value = max(0, baseline * seasonality * trend)
+
+                        records.append(
+                            {
+                                "Center": center,
+                                "Item": item,
+                                "Month": month.strftime("%Y-%m"),
+                                "Forecast": round(float(forecast_value), 2),
+                                "LowerBound": round(float(forecast_value * 0.9), 2),
+                                "UpperBound": round(float(forecast_value * 1.1), 2),
+                            }
+                        )
+
+                return records
+
             def analyze_uploaded_data(self, file_content):
                 """Analyze uploaded CSV file for next year forecasting"""
                 try:
@@ -271,17 +379,15 @@ except ImportError:
                         analysis["total_demand"] = float(df[demand_columns[0]].sum())
 
                     analysis["recommendations"] = [
-                        "✅ Data uploaded successfully for analysis",
-                        f"📊 Found {len(df)} records for processing",
-                        "🎯 Ready to generate next year forecasts",
-                        "📈 Seasonal patterns will be analyzed automatically",
-                        f"🏪 {len(analysis['centers'])} centers detected" if analysis["centers"] else "🏪 No centers detected",
-                        (
-                            f"🐟 {len(analysis['products'])} products detected"
-                            if analysis["products"]
-                            else "🐟 No products detected"
-                        ),
+                        "Data upload completed and ready for analysis.",
+                        f"{len(df)} records identified for processing.",
+                        "Next-year forecasting pipeline configured.",
+                        "Seasonal demand patterns will be evaluated automatically.",
+                        f"{len(analysis['centers'])} locations detected." if analysis["centers"] else "No locations detected.",
+                        f"{len(analysis['products'])} product groups detected." if analysis["products"] else "No product groups detected.",
                     ]
+
+                    analysis["dataframe"] = df
 
                     return analysis
                 except Exception as e:
@@ -290,7 +396,13 @@ except ImportError:
 
 
 # Page config
-st.set_page_config(page_title="Seafood Demand Forecasting", page_icon="🐟", layout="wide", initial_sidebar_state="expanded")
+icon_path = os.path.join(project_root, "app", "frontend", "static", "images", "seafood_dashboard_icon.svg")
+st.set_page_config(
+    page_title="Seafood Demand Forecasting",
+    page_icon=icon_path,
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 # Initialize session state
 if "forecast_engine" not in st.session_state:
@@ -298,180 +410,356 @@ if "forecast_engine" not in st.session_state:
 
 forecast_engine = st.session_state.forecast_engine
 
+
+def get_theme_palette():
+    """Return color palette based on configured Streamlit theme."""
+    base_theme = st.get_option("theme.base") or "light"
+    if base_theme.lower() == "dark":
+        return {
+            "background": "#0f172a",
+            "surface": "#111827",
+            "card": "#1f2937",
+            "border": "#1f2937",
+            "text": "#f8fafc",
+            "muted": "#94a3b8",
+            "accent": "#38bdf8",
+            "accent_alt": "#6366f1",
+            "success_bg": "#073c2c",
+            "success_border": "#22c55e",
+            "info_bg": "#1e1b4b",
+            "info_border": "#818cf8",
+            "warning_bg": "#3b1d0b",
+            "warning_border": "#fb923c",
+            "grid": "#253044",
+        }
+    return {
+        "background": "#f4f6fb",
+        "surface": "#ffffff",
+        "card": "#ffffff",
+        "border": "#e2e8f0",
+        "text": "#0f172a",
+        "muted": "#475569",
+        "accent": "#2563eb",
+        "accent_alt": "#0ea5e9",
+        "success_bg": "#ecfdf3",
+        "success_border": "#34d399",
+        "info_bg": "#eef2ff",
+        "info_border": "#818cf8",
+        "warning_bg": "#fff7ed",
+        "warning_border": "#fb923c",
+        "grid": "#d0d7e3",
+    }
+
+
+PALETTE = get_theme_palette()
+
+
+def hex_to_rgba(hex_color, alpha=1.0):
+    """Convert hex color string to rgba(...) string with given alpha."""
+    hex_color = hex_color.lstrip("#")
+    if len(hex_color) != 6:
+        return f"rgba(0,0,0,{alpha})"
+    r = int(hex_color[0:2], 16)
+    g = int(hex_color[2:4], 16)
+    b = int(hex_color[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def apply_chart_theme(fig, palette=PALETTE, height=400):
+    """Apply consistent styling to Plotly charts."""
+    fig.update_layout(
+        height=height,
+        plot_bgcolor=palette["surface"],
+        paper_bgcolor=palette["surface"],
+        font=dict(color=palette["text"]),
+        hovermode="x unified",
+        legend=dict(
+            bgcolor=palette["surface"],
+            bordercolor=palette["border"],
+            borderwidth=1,
+            font=dict(color=palette["text"]),
+        ),
+        margin=dict(l=20, r=20, t=60, b=40),
+    )
+    fig.update_xaxes(
+        showgrid=True,
+        gridcolor=palette["grid"],
+        linecolor=palette["grid"],
+        zeroline=False,
+    )
+    fig.update_yaxes(
+        showgrid=True,
+        gridcolor=palette["grid"],
+        linecolor=palette["grid"],
+        zeroline=False,
+    )
+    return fig
+
+
+def render_page_header(title, subtitle="", icon="monitoring"):
+    """Render a page header with icon and subtitle."""
+    st.markdown(
+        f"""
+        <div class="page-header">
+            <div class="page-header__icon material-symbols-rounded">{icon}</div>
+            <div>
+                <h1>{title}</h1>
+                <p>{subtitle}</p>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_section_heading(title, icon="insights"):
+    """Render section heading with consistent styling."""
+    st.markdown(
+        f"""
+        <div class="section-heading">
+            <span class="material-symbols-rounded">{icon}</span>
+            <span>{title}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 # Custom CSS with improved design
 st.markdown(
-    """
+    f"""
     <style>
-    /* Global Styles */
-    .main {
-        background-color: #f8f9fa;
-    }
-    
-    /* Header Styles */
-    .main-header {
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&display=swap');
+
+    .stApp {{
+        background-color: {PALETTE["background"]};
+        color: {PALETTE["text"]};
+        font-family: 'Inter', sans-serif;
+    }}
+
+    .block-container {{
+        padding: 1rem 2.5rem 2.5rem 2.5rem;
+        max-width: 1400px;
+    }}
+
+    .page-header {{
+        background: {PALETTE["surface"]};
+        border: 1px solid {PALETTE["border"]};
+        border-radius: 16px;
+        padding: 1.5rem;
+        margin-bottom: 1.5rem;
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+        box-shadow: 0 15px 35px rgba(15, 23, 42, 0.08);
+    }}
+
+    .page-header h1 {{
+        margin: 0;
+        font-size: 1.75rem;
+        color: {PALETTE["text"]};
+    }}
+
+    .page-header p {{
+        margin: 0.2rem 0 0 0;
+        color: {PALETTE["muted"]};
+        font-size: 0.95rem;
+    }}
+
+    .page-header__icon {{
         font-size: 2.5rem;
-        font-weight: 700;
-        color: #1a1a2e;
-        text-align: center;
-        padding: 1.5rem 0;
-        margin-bottom: 1rem;
-        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-        color: white;
-        border-radius: 12px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-    }
-    
-    /* Sidebar Styles */
-    .css-1d391kg, .css-12oz5g7 {
-        background-color: #1a1a2e;
-    }
-    
-    .sidebar .sidebar-content {
-        background-color: #1a1a2e;
-    }
-    
-    /* Card Styles */
-    .metric-card {
-        background: white;
+        color: {PALETTE["accent"]};
+    }}
+
+    .section-heading {{
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: {PALETTE["muted"]};
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin: 1.5rem 0 0.75rem;
+    }}
+
+    .section-heading .material-symbols-rounded {{
+        font-size: 1.35rem;
+        color: {PALETTE["accent"]};
+        background: {PALETTE["accent"]}1a;
+        border-radius: 8px;
+        padding: 0.15rem 0.35rem;
+    }}
+
+    .metric-card, [data-testid="stMetric"] {{
+        background: {PALETTE["card"]};
+        border-radius: 14px;
+        border: 1px solid {PALETTE["border"]};
+        box-shadow: 0 25px 45px rgba(15, 23, 42, 0.08);
         padding: 1.5rem;
-        border-radius: 12px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-        border-left: 5px solid #1a1a2e;
-        transition: transform 0.3s ease, box-shadow 0.3s ease;
-        margin-bottom: 1rem;
-    }
-    
-    .metric-card:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 8px 20px rgba(0,0,0,0.12);
-    }
-    
-    /* Button Styles */
-    .stButton>button {
+    }}
+
+    .stButton>button {{
         width: 100%;
-        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-        color: white;
+        background: linear-gradient(120deg, {PALETTE["accent"]}, {PALETTE["accent_alt"]});
+        color: #fff;
         border: none;
-        padding: 0.75rem 1.5rem;
-        border-radius: 8px;
+        padding: 0.85rem 1.25rem;
+        border-radius: 12px;
         font-weight: 600;
-        transition: all 0.3s ease;
-        box-shadow: 0 4px 8px rgba(26,26,46,0.2);
-    }
-    
-    .stButton>button:hover {
-        background: linear-gradient(135deg, #16213e 0%, #0f3460 100%);
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        box-shadow: 0 20px 35px rgba(37, 99, 235, 0.25);
+    }}
+
+    .stButton>button:hover {{
         transform: translateY(-2px);
-        box-shadow: 0 6px 12px rgba(26,26,46,0.3);
-    }
-    
-    /* Metric Styles */
-    [data-testid="metric-container"] {
-        background: white;
-        padding: 1.5rem;
-        border-radius: 12px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-        border-left: 5px solid #1a1a2e;
-    }
-    
-    /* Section Headers */
-    h2 {
-        color: #1a1a2e;
-        border-bottom: 3px solid #1a1a2e;
-        padding-bottom: 0.5rem;
-        margin-top: 2rem;
-    }
-    
-    h3 {
-        color: #16213e;
-        margin-top: 1.5rem;
-    }
-    
-    /* Expander Styles */
-    .streamlit-expanderHeader {
-        background-color: #f8f9fa;
-        border-radius: 8px;
-        border: 1px solid #e9ecef;
-        font-weight: 600;
-    }
-    
-    /* Selectbox and Input Styles */
-    .stSelectbox, .stNumberInput, .stSlider, .stMultiselect {
-        margin-bottom: 1rem;
-    }
-    
-    /* Success/Error Messages */
-    .stAlert {
-        border-radius: 8px;
-        padding: 1rem;
-    }
-    
-    /* Dataframe Styles */
-    .dataframe {
-        border-radius: 8px;
-        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-    }
-    
-    /* Footer Styles */
-    .footer {
-        text-align: center;
-        color: #6c757d;
-        padding: 2rem 0;
-        margin-top: 3rem;
-        border-top: 1px solid #e9ecef;
-    }
-    
-    /* Custom Divider */
-    .custom-divider {
-        height: 3px;
-        background: linear-gradient(90deg, #1a1a2e, #16213e, #0f3460);
+        box-shadow: 0 25px 45px rgba(37, 99, 235, 0.35);
+    }}
+
+    .sidebar-header {{
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.5rem 0 1.5rem 0;
+        border-bottom: 1px solid {PALETTE["border"]};
+    }}
+
+    .sidebar-header__icon {{
+        font-size: 1.75rem;
+        color: {PALETTE["accent"]};
+    }}
+
+    .sidebar-header h2 {{
+        margin: 0;
+        font-size: 1.1rem;
+        color: {PALETTE["text"]};
+    }}
+
+    .sidebar-header span {{
+        font-size: 0.85rem;
+        color: {PALETTE["muted"]};
+    }}
+
+    .content-divider {{
+        height: 2px;
         border: none;
-        border-radius: 2px;
+        background: linear-gradient(90deg, {PALETTE["accent"]}, transparent);
         margin: 2rem 0;
-    }
-    
-    /* Info Box */
-    .info-box {
-        background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
-        padding: 1.5rem;
+    }}
+
+    .info-box, .success-box, .warning-box {{
+        background: {PALETTE["surface"]};
+        border: 1px solid {PALETTE["border"]};
         border-radius: 12px;
-        border-left: 5px solid #2196f3;
+        padding: 1rem 1.25rem;
         margin: 1rem 0;
-    }
-    
-    /* Warning Box */
-    .warning-box {
-        background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%);
-        padding: 1.5rem;
+    }}
+
+    .success-box {{
+        background: {PALETTE["success_bg"]};
+        border-color: {PALETTE["success_border"]};
+    }}
+
+    .info-box {{
+        background: {PALETTE["info_bg"]};
+        border-color: {PALETTE["info_border"]};
+    }}
+
+    .warning-box {{
+        background: {PALETTE["warning_bg"]};
+        border-color: {PALETTE["warning_border"]};
+    }}
+
+    .stAlert {{
         border-radius: 12px;
-        border-left: 5px solid #ff9800;
-        margin: 1rem 0;
-    }
-    
-    /* Success Box */
-    .success-box {
-        background: linear-gradient(135deg, #e8f5e8 0%, #c8e6c9 100%);
-        padding: 1.5rem;
+        border: 1px solid {PALETTE["border"]};
+    }}
+
+    .footer {{
+        text-align: center;
+        color: {PALETTE["muted"]};
+        padding: 1.5rem 0 2rem 0;
+        font-size: 0.9rem;
+        margin-top: 2rem;
+        border-top: 1px solid {PALETTE["border"]};
+    }}
+
+    .stDataFrame, .dataframe {{
+        border: 1px solid {PALETTE["border"]};
         border-radius: 12px;
-        border-left: 5px solid #4caf50;
-        margin: 1rem 0;
-    }
+    }}
+
+    .recommendation-list {{
+        list-style: none;
+        padding-left: 0;
+        margin: 0;
+    }}
+
+    .recommendation-list li {{
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.4rem;
+        color: {PALETTE["text"]};
+        font-weight: 500;
+    }}
+
+    .recommendation-list li .material-symbols-rounded {{
+        font-size: 1rem;
+        color: {PALETTE["accent"]};
+        background: transparent;
+        padding: 0;
+    }}
+
+    @media (max-width: 1200px) {{
+        .block-container {{
+            padding: 1rem;
+        }}
+    }}
+
+    @media (max-width: 768px) {{
+        .block-container {{
+            padding: 0.5rem;
+        }}
+        .page-header {{
+            flex-direction: column;
+            align-items: flex-start;
+        }}
+        .page-header h1 {{
+            font-size: 1.35rem;
+        }}
+    }}
     </style>
 """,
     unsafe_allow_html=True,
 )
 
 # Sidebar
-st.sidebar.title("🐟 Seafood Forecasting")
-st.sidebar.markdown('<hr class="custom-divider">', unsafe_allow_html=True)
+st.sidebar.markdown(
+    """
+    <div class="sidebar-header">
+        <span class="material-symbols-rounded sidebar-header__icon">donut_small</span>
+        <div>
+            <h2>Seafood Forecasting</h2>
+            <span>Demand Intelligence Suite</span>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+st.sidebar.markdown('<hr class="content-divider">', unsafe_allow_html=True)
 
 # Navigation
 page = st.sidebar.selectbox("Navigate", ["Dashboard", "Forecast Generator", "Data Analyzer", "Analytics"])
 
 # Dashboard Page
 if page == "Dashboard":
-    st.markdown('<div class="main-header">📊 Seafood Demand Forecasting Dashboard</div>', unsafe_allow_html=True)
-    st.markdown('<hr class="custom-divider">', unsafe_allow_html=True)
+    render_page_header(
+        "Seafood Demand Forecasting Dashboard",
+        "Monitor key demand signals and simulate forward-looking scenarios.",
+        icon="leaderboard",
+    )
+    st.markdown('<hr class="content-divider">', unsafe_allow_html=True)
 
     # Get available data
     centers = forecast_engine.get_available_centers()
@@ -497,10 +785,10 @@ if page == "Dashboard":
         model_count = len([k for k in forecast_engine.models.keys() if forecast_engine.models[k] is not None])
         st.metric("Available Models", model_count)
 
-    st.markdown('<hr class="custom-divider">', unsafe_allow_html=True)
+    st.markdown('<hr class="content-divider">', unsafe_allow_html=True)
 
     # Quick Forecast
-    st.subheader("🚀 Quick Forecast")
+    render_section_heading("Quick Forecast", icon="bolt")
 
     col1, col2, col3 = st.columns(3)
 
@@ -537,7 +825,7 @@ if page == "Dashboard":
                             y=df_forecast["forecast"],
                             mode="lines",
                             name="Forecast",
-                            line=dict(color="#1a1a2e", width=3),
+                            line=dict(color=PALETTE["accent"], width=3),
                         )
                     )
 
@@ -547,7 +835,7 @@ if page == "Dashboard":
                             y=df_forecast["upper_bound"],
                             mode="lines",
                             name="Upper Bound",
-                            line=dict(color="rgba(26,26,46,0.3)", width=1),
+                            line=dict(color=PALETTE["accent_alt"], width=1),
                             showlegend=False,
                         )
                     )
@@ -559,8 +847,8 @@ if page == "Dashboard":
                             mode="lines",
                             name="Lower Bound",
                             fill="tonexty",
-                            fillcolor="rgba(26,26,46,0.1)",
-                            line=dict(color="rgba(26,26,46,0.3)", width=1),
+                            fillcolor=hex_to_rgba(PALETTE["accent"], 0.12),
+                            line=dict(color=PALETTE["accent_alt"], width=1),
                             showlegend=False,
                         )
                     )
@@ -569,17 +857,12 @@ if page == "Dashboard":
                         title=f"Forecast for {selected_item} at {selected_center}",
                         xaxis_title="Date",
                         yaxis_title="Demand (kg)",
-                        hovermode="x unified",
-                        height=500,
-                        plot_bgcolor='rgba(0,0,0,0)',
-                        paper_bgcolor='rgba(0,0,0,0)',
-                        font=dict(color="#1a1a2e")
                     )
 
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(apply_chart_theme(fig, height=500), width="stretch")
 
                     # Forecast summary
-                    st.subheader("📈 Forecast Summary")
+                    render_section_heading("Forecast Summary", icon="analytics")
                     col1, col2, col3 = st.columns(3)
 
                     avg_forecast = df_forecast["forecast"].mean()
@@ -608,8 +891,8 @@ if page == "Dashboard":
 
     # Historical Data Overview
     if forecast_engine.data is not None and not forecast_engine.data.empty:
-        st.markdown('<hr class="custom-divider">', unsafe_allow_html=True)
-        st.subheader("📊 Historical Data Overview")
+        st.markdown('<hr class="content-divider">', unsafe_allow_html=True)
+        render_section_heading("Historical Data Overview", icon="query_stats")
 
         col1, col2 = st.columns(2)
 
@@ -625,16 +908,10 @@ if page == "Dashboard":
                     y="PAY WEIGHT",
                     title="Total Demand by Center",
                     labels={"PAY WEIGHT": "Demand (kg)", "CENTER NAME": "Center"},
-                    color="PAY WEIGHT",
-                    color_continuous_scale="blues"
+                    color_discrete_sequence=[PALETTE["accent"]],
                 )
-                fig_center.update_layout(
-                    height=400,
-                    plot_bgcolor='rgba(0,0,0,0)',
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    font=dict(color="#1a1a2e")
-                )
-                st.plotly_chart(fig_center, use_container_width=True)
+                fig_center.update_traces(marker_line_color=PALETTE["accent_alt"], marker_line_width=1)
+                st.plotly_chart(apply_chart_theme(fig_center), width="stretch")
 
         with col2:
             # Demand by item
@@ -649,21 +926,56 @@ if page == "Dashboard":
                     orientation="h",
                     title="Top 10 Items by Demand",
                     labels={"PAY WEIGHT": "Demand (kg)", "ITEM": "Item"},
-                    color="PAY WEIGHT",
-                    color_continuous_scale="teal"
+                    color_discrete_sequence=[PALETTE["accent"]],
                 )
-                fig_item.update_layout(
-                    height=400,
-                    plot_bgcolor='rgba(0,0,0,0)',
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    font=dict(color="#1a1a2e")
+                fig_item.update_traces(marker_line_color=PALETTE["accent_alt"], marker_line_width=1)
+                st.plotly_chart(apply_chart_theme(fig_item), width="stretch")
+
+        if {"DATE", "PAY WEIGHT"}.issubset(forecast_engine.data.columns):
+            render_section_heading("Weekly Demand Pattern", icon="calendar_month")
+            seasonality_df = forecast_engine.data[["DATE", "PAY WEIGHT"]].copy()
+            seasonality_df["DATE"] = pd.to_datetime(seasonality_df["DATE"], errors="coerce")
+            seasonality_df = seasonality_df.dropna(subset=["DATE"])
+
+            if not seasonality_df.empty:
+                seasonality_df["Weekday"] = seasonality_df["DATE"].dt.day_name()
+                weekday_order = [
+                    "Monday",
+                    "Tuesday",
+                    "Wednesday",
+                    "Thursday",
+                    "Friday",
+                    "Saturday",
+                    "Sunday",
+                ]
+                weekday_summary = (
+                    seasonality_df.groupby("Weekday")["PAY WEIGHT"]
+                    .mean()
+                    .reindex(weekday_order)
+                    .dropna()
+                    .reset_index()
                 )
-                st.plotly_chart(fig_item, use_container_width=True)
+
+                if not weekday_summary.empty:
+                    weekday_summary = weekday_summary.rename(columns={"PAY WEIGHT": "Average Demand"})
+                    fig_weekday = px.line(
+                        weekday_summary,
+                        x="Weekday",
+                        y="Average Demand",
+                        title="Average Demand by Weekday",
+                        markers=True,
+                        color_discrete_sequence=[PALETTE["accent"]],
+                    )
+                    st.plotly_chart(apply_chart_theme(fig_weekday, height=380), width="stretch")
 
 # Forecast Generator Page
 elif page == "Forecast Generator":
-    st.markdown('<div class="main-header">🔮 Forecast Generator</div>', unsafe_allow_html=True)
-    st.markdown('<hr class="custom-divider">', unsafe_allow_html=True)
+    render_page_header(
+        "Forecast Generator",
+        "Configure tailored demand simulations by location, category, and model.",
+        icon="precision_manufacturing",
+    )
+    st.markdown('<hr class="content-divider">', unsafe_allow_html=True)
 
     centers = forecast_engine.get_available_centers()
     items = forecast_engine.get_available_items()
@@ -705,7 +1017,7 @@ elif page == "Forecast Generator":
 
                     # Display forecasts
                     for center in selected_centers:
-                        st.subheader(f"📍 {center}")
+                        render_section_heading(f"{center}", icon="location_on")
 
                         for item in selected_items:
                             if center in forecasts and item in forecasts[center]:
@@ -713,7 +1025,7 @@ elif page == "Forecast Generator":
                                 df_forecast = pd.DataFrame(forecast_data)
                                 df_forecast["date"] = pd.to_datetime(df_forecast["date"])
 
-                                with st.expander(f"📦 {item}"):
+                                with st.expander(f"{item}"):
                                     fig = go.Figure()
 
                                     fig.add_trace(
@@ -722,7 +1034,7 @@ elif page == "Forecast Generator":
                                             y=df_forecast["forecast"],
                                             mode="lines+markers",
                                             name="Forecast",
-                                            line=dict(color="#1a1a2e", width=2),
+                                            line=dict(color=PALETTE["accent"], width=2),
                                         )
                                     )
 
@@ -732,7 +1044,7 @@ elif page == "Forecast Generator":
                                             y=df_forecast["upper_bound"],
                                             mode="lines",
                                             name="Upper Bound",
-                                            line=dict(color="rgba(26,26,46,0.3)", dash="dash"),
+                                            line=dict(color=PALETTE["accent_alt"], dash="dash"),
                                             showlegend=True,
                                         )
                                     )
@@ -744,8 +1056,8 @@ elif page == "Forecast Generator":
                                             mode="lines",
                                             name="Lower Bound",
                                             fill="tonexty",
-                                            fillcolor="rgba(26,26,46,0.1)",
-                                            line=dict(color="rgba(26,26,46,0.3)", dash="dash"),
+                                            fillcolor=hex_to_rgba(PALETTE["accent"], 0.12),
+                                            line=dict(color=PALETTE["accent_alt"], dash="dash"),
                                             showlegend=True,
                                         )
                                     )
@@ -754,14 +1066,9 @@ elif page == "Forecast Generator":
                                         title=f"Forecast for {item}",
                                         xaxis_title="Date",
                                         yaxis_title="Demand (kg)",
-                                        hovermode="x unified",
-                                        height=400,
-                                        plot_bgcolor='rgba(0,0,0,0)',
-                                        paper_bgcolor='rgba(0,0,0,0)',
-                                        font=dict(color="#1a1a2e")
                                     )
 
-                                    st.plotly_chart(fig, use_container_width=True)
+                                    st.plotly_chart(apply_chart_theme(fig), width="stretch")
 
                                     # Summary stats
                                     col1, col2, col3, col4 = st.columns(4)
@@ -778,77 +1085,205 @@ elif page == "Forecast Generator":
 
 # Data Analyzer Page
 elif page == "Data Analyzer":
-    st.markdown('<div class="main-header">📈 Data Analyzer</div>', unsafe_allow_html=True)
-    st.markdown('<hr class="custom-divider">', unsafe_allow_html=True)
+    render_page_header(
+        "Data Analyzer",
+        "Explore uploaded operational data and activate forecasting workflows.",
+        icon="database",
+    )
+    st.markdown('<hr class="content-divider">', unsafe_allow_html=True)
 
-    st.subheader("Upload Data for Analysis")
+    render_section_heading("Upload Data for Analysis", icon="cloud_upload")
 
     uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
 
     if uploaded_file is not None:
         try:
-            # Analyze uploaded file
+            uploaded_file.seek(0)
             content = uploaded_file.read()
             analysis = forecast_engine.analyze_uploaded_data(content)
 
             if analysis.get("status") == "success":
-                st.success("Data analyzed successfully!")
+                uploaded_df = analysis.pop("dataframe", None)
+                st.session_state["uploaded_dataset"] = uploaded_df
+                st.session_state.pop("uploaded_forecast_df", None)
 
-                # Display analysis results
+                st.success("Data analyzed successfully.")
+
                 col1, col2 = st.columns(2)
 
                 with col1:
                     st.metric("Total Records", analysis.get("total_records", 0))
 
                     if analysis.get("date_range"):
-                        st.markdown('<div class="info-box">', unsafe_allow_html=True)
-                        st.info(
+                        st.markdown(
                             f"""
-                        **Date Range:**
-                        - Start: {analysis['date_range']['start']}
-                        - End: {analysis['date_range']['end']}
-                        """
+                            <div class="info-box">
+                                <strong>Date Range</strong><br/>
+                                {analysis['date_range']['start']} to {analysis['date_range']['end']}
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
                         )
-                        st.markdown('</div>', unsafe_allow_html=True)
 
                     if analysis.get("centers"):
-                        st.write(f"**Centers ({len(analysis['centers'])})**:")
-                        st.write(analysis["centers"][:10])  # Show first 10
+                        st.write(f"Locations detected ({len(analysis['centers'])}):")
+                        st.write(analysis["centers"][:10])
 
                 with col2:
                     if analysis.get("total_demand", 0) > 0:
                         st.metric("Total Demand", f"{analysis['total_demand']:,.0f} kg")
 
                     if analysis.get("products"):
-                        st.write(f"**Products ({len(analysis['products'])})**:")
-                        st.write(analysis["products"][:10])  # Show first 10
+                        st.write(f"Products detected ({len(analysis['products'])}):")
+                        st.write(analysis["products"][:10])
 
-                st.subheader("Recommendations")
-                for rec in analysis.get("recommendations", []):
-                    st.write(f"- {rec}")
+                recommendations = analysis.get("recommendations", [])
+                if recommendations:
+                    render_section_heading("Recommendations", icon="task_alt")
+                    items = "".join(
+                        [
+                            f"<li><span class='material-symbols-rounded'>task_alt</span>{rec}</li>"
+                            for rec in recommendations
+                        ]
+                    )
+                    st.markdown(f"<ul class='recommendation-list'>{items}</ul>", unsafe_allow_html=True)
 
-                # Generate forecast from uploaded data
-                st.markdown('<hr class="custom-divider">', unsafe_allow_html=True)
-                st.subheader("Generate Forecast from Uploaded Data")
+                if uploaded_df is not None and not uploaded_df.empty:
+                    render_section_heading("Uploaded Data Preview", icon="table_chart")
+                    st.dataframe(uploaded_df.head(200), width="stretch", height=300)
 
-                forecast_months = st.slider("Forecast Months", min_value=1, max_value=24, value=12)
+                st.markdown('<hr class="content-divider">', unsafe_allow_html=True)
+                render_section_heading("Generate Forecast from Uploaded Data", icon="show_chart")
 
-                if st.button("Generate Next Year Forecast"):
-                    with st.spinner("Generating forecast from uploaded data..."):
-                        # Simulate forecast generation
-                        st.success("Forecast generated successfully!")
-                        st.info(f"Generated {forecast_months}-month forecast based on uploaded data.")
+                forecast_months = st.slider(
+                    "Forecast Months",
+                    min_value=1,
+                    max_value=24,
+                    value=12,
+                    key="uploaded_forecast_months",
+                )
+
+                if st.button("Generate Next Year Forecast", key="uploaded_forecast_btn"):
+                    if uploaded_df is None or uploaded_df.empty:
+                        st.warning("The uploaded dataset is empty or unreadable. Please upload a valid CSV file.")
+                    else:
+                        with st.spinner("Generating forecast from uploaded data..."):
+                            forecast_records = forecast_engine.generate_forecast_from_uploaded_data(
+                                uploaded_df, forecast_months
+                            )
+
+                            if forecast_records:
+                                forecast_df = pd.DataFrame(forecast_records)
+                                st.session_state["uploaded_forecast_df"] = forecast_df
+                                st.success("Forecast generated successfully.")
+                                st.info(f"Created a {forecast_months}-month projection based on the uploaded signals.")
+                            else:
+                                st.warning("Could not derive forecast due to missing date or demand columns.")
+
+                forecast_df = st.session_state.get("uploaded_forecast_df")
+                if forecast_df is not None and not forecast_df.empty:
+                    st.markdown('<hr class="content-divider">', unsafe_allow_html=True)
+                    render_section_heading("Forecast Output", icon="stacked_line_chart")
+
+                    col_sel1, col_sel2 = st.columns(2)
+                    with col_sel1:
+                        selected_center = st.selectbox(
+                            "Select Location",
+                            sorted(forecast_df["Center"].unique()),
+                            key="uploaded_center_select",
+                        )
+                    with col_sel2:
+                        filtered_items = sorted(
+                            forecast_df[forecast_df["Center"] == selected_center]["Item"].unique()
+                        )
+                        selected_item = st.selectbox(
+                            "Select Product",
+                            filtered_items,
+                            key="uploaded_item_select",
+                        )
+
+                    filtered_df = forecast_df[
+                        (forecast_df["Center"] == selected_center) & (forecast_df["Item"] == selected_item)
+                    ].copy()
+
+                    if not filtered_df.empty:
+                        filtered_df["MonthStart"] = pd.to_datetime(filtered_df["Month"])
+
+                        fig_uploaded = go.Figure()
+                        fig_uploaded.add_trace(
+                            go.Scatter(
+                                x=filtered_df["MonthStart"],
+                                y=filtered_df["Forecast"],
+                                name="Forecast",
+                                mode="lines+markers",
+                                line=dict(color=PALETTE["accent"], width=3),
+                            )
+                        )
+                        fig_uploaded.add_trace(
+                            go.Scatter(
+                                x=filtered_df["MonthStart"],
+                                y=filtered_df["UpperBound"],
+                                name="Upper Bound",
+                                line=dict(color=PALETTE["accent_alt"], dash="dot"),
+                            )
+                        )
+                        fig_uploaded.add_trace(
+                            go.Scatter(
+                                x=filtered_df["MonthStart"],
+                                y=filtered_df["LowerBound"],
+                                name="Lower Bound",
+                                fill="tonexty",
+                                fillcolor=hex_to_rgba(PALETTE["accent"], 0.12),
+                                line=dict(color=PALETTE["accent_alt"], dash="dot"),
+                            )
+                        )
+                        fig_uploaded.update_layout(
+                            title=f"{selected_item} forecast for {selected_center}",
+                            xaxis_title="Month",
+                            yaxis_title="Demand (kg)",
+                        )
+                        st.plotly_chart(apply_chart_theme(fig_uploaded), width="stretch")
+
+                        summary_col1, summary_col2, summary_col3 = st.columns(3)
+                        with summary_col1:
+                            st.metric("Average Forecast", f"{filtered_df['Forecast'].mean():,.0f} kg")
+                        with summary_col2:
+                            st.metric("Peak Projection", f"{filtered_df['UpperBound'].max():,.0f} kg")
+                        with summary_col3:
+                            st.metric("Lowest Projection", f"{filtered_df['LowerBound'].min():,.0f} kg")
+
+                        st.dataframe(
+                            filtered_df[["Month", "Forecast", "LowerBound", "UpperBound"]],
+                            width="stretch",
+                        )
+
+                        st.download_button(
+                            label="Download Forecast CSV",
+                            data=filtered_df.to_csv(index=False),
+                            file_name=f"uploaded_forecast_{selected_center}_{selected_item}.csv",
+                            mime="text/csv",
+                        )
             else:
+                st.session_state.pop("uploaded_dataset", None)
+                st.session_state.pop("uploaded_forecast_df", None)
                 st.error(f"Analysis failed: {analysis.get('error', 'Unknown error')}")
         except Exception as e:
+            st.session_state.pop("uploaded_dataset", None)
+            st.session_state.pop("uploaded_forecast_df", None)
             st.error(f"Error analyzing file: {str(e)}")
     else:
+        st.session_state.pop("uploaded_dataset", None)
+        st.session_state.pop("uploaded_forecast_df", None)
         st.info("Please upload a CSV file to analyze.")
 
 # Analytics Page
 elif page == "Analytics":
-    st.markdown('<div class="main-header">📋 Analytics</div>', unsafe_allow_html=True)
-    st.markdown('<hr class="custom-divider">', unsafe_allow_html=True)
+    render_page_header(
+        "Analytics",
+        "Deep dive into historical performance by month, location, and species.",
+        icon="insights",
+    )
+    st.markdown('<hr class="content-divider">', unsafe_allow_html=True)
 
     if forecast_engine.data is not None and not forecast_engine.data.empty:
         st.subheader("Data Insights")
@@ -868,15 +1303,9 @@ elif page == "Analytics":
                 y="PAY WEIGHT",
                 title="Monthly Demand Trends",
                 labels={"PAY WEIGHT": "Demand (kg)", "Month": "Month"},
-                color_discrete_sequence=['#1a1a2e']
+                color_discrete_sequence=[PALETTE["accent"]],
             )
-            fig_monthly.update_layout(
-                height=400,
-                plot_bgcolor='rgba(0,0,0,0)',
-                paper_bgcolor='rgba(0,0,0,0)',
-                font=dict(color="#1a1a2e")
-            )
-            st.plotly_chart(fig_monthly, use_container_width=True)
+            st.plotly_chart(apply_chart_theme(fig_monthly), width="stretch")
 
             # Center-Item Matrix
             if "CENTER NAME" in forecast_engine.data.columns and "ITEM" in forecast_engine.data.columns:
@@ -889,24 +1318,22 @@ elif page == "Analytics":
                     labels=dict(x="Item", y="Center", color="Demand (kg)"),
                     title="Demand Heatmap: Center vs Item",
                     aspect="auto",
-                    color_continuous_scale="blues"
+                    color_continuous_scale=[
+                        [0.0, PALETTE["surface"]],
+                        [0.5, PALETTE["accent_alt"]],
+                        [1.0, PALETTE["accent"]],
+                    ],
                 )
-                fig_heatmap.update_layout(
-                    height=600,
-                    plot_bgcolor='rgba(0,0,0,0)',
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    font=dict(color="#1a1a2e")
-                )
-                st.plotly_chart(fig_heatmap, use_container_width=True)
+                st.plotly_chart(apply_chart_theme(fig_heatmap, height=600), width="stretch")
 
                 # Display pivot table
                 st.subheader("Demand Table")
-                st.dataframe(pivot_table, use_container_width=True)
+                st.dataframe(pivot_table, width="stretch")
     else:
         st.warning("No historical data available for analytics.")
 
 # Footer
-st.markdown('<hr class="custom-divider">', unsafe_allow_html=True)
+st.markdown('<hr class="content-divider">', unsafe_allow_html=True)
 st.markdown(
     """
 <div class="footer">
