@@ -133,7 +133,11 @@ class SimpleForecastEngine:
     def get_available_centers(self) -> List[str]:
         """Get list of available centers"""
         if self.data is not None and self.config["model"]["center_column"] in self.data.columns:
-            return sorted(self.data[self.config["model"]["center_column"]].unique().tolist())
+            # Remove NaN values and duplicates, then sort
+            centers = self.data[self.config["model"]["center_column"]].dropna().unique().tolist()
+            # Remove any duplicates and filter out empty strings
+            centers = [c for c in centers if c and str(c).strip()]
+            return sorted(list(set(centers)))  # Use set to remove duplicates, then sort
         return ["KASARA", "TALOJA", "ALIBAG", "UTTAN", "VASAI"]
 
     def get_available_items(self, center: Optional[str] = None) -> List[str]:
@@ -143,7 +147,11 @@ class SimpleForecastEngine:
                 filtered_data = self.data[self.data[self.config["model"]["center_column"]] == center]
             else:
                 filtered_data = self.data
-            return sorted(filtered_data[self.config["model"]["item_column"]].unique().tolist())
+            # Remove NaN values and duplicates, then sort
+            items = filtered_data[self.config["model"]["item_column"]].dropna().unique().tolist()
+            # Remove any duplicates and filter out empty strings
+            items = [i for i in items if i and str(i).strip()]
+            return sorted(list(set(items)))  # Use set to remove duplicates, then sort
         return ["CHILAPI", "MIX FISH", "PRAWN HEAD AND SHEL", "MUNDI", "BOMBIL"]
 
     def generate_forecast(

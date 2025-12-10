@@ -155,7 +155,11 @@ except ImportError:
             def get_available_centers(self):
                 """Get list of available centers"""
                 if self.data is not None and self.config["model"]["center_column"] in self.data.columns:
-                    return sorted(self.data[self.config["model"]["center_column"]].unique().tolist())
+                    # Remove NaN values and duplicates, then sort
+                    centers = self.data[self.config["model"]["center_column"]].dropna().unique().tolist()
+                    # Remove any duplicates and filter out empty strings
+                    centers = [c for c in centers if c and str(c).strip()]
+                    return sorted(list(set(centers)))  # Use set to remove duplicates, then sort
                 return ["KASARA", "TALOJA", "ALIBAG", "UTTAN", "VASAI"]
 
             def get_available_items(self, center=None):
@@ -165,7 +169,11 @@ except ImportError:
                         filtered_data = self.data[self.data[self.config["model"]["center_column"]] == center]
                     else:
                         filtered_data = self.data
-                    return sorted(filtered_data[self.config["model"]["item_column"]].unique().tolist())
+                    # Remove NaN values and duplicates, then sort
+                    items = filtered_data[self.config["model"]["item_column"]].dropna().unique().tolist()
+                    # Remove any duplicates and filter out empty strings
+                    items = [i for i in items if i and str(i).strip()]
+                    return sorted(list(set(items)))  # Use set to remove duplicates, then sort
                 return ["CHILAPI", "MIX FISH", "PRAWN HEAD AND SHEL", "MUNDI", "BOMBIL"]
 
             def generate_forecast(self, centers, items, forecast_days=30, model_type="xgboost"):
@@ -413,24 +421,31 @@ forecast_engine = st.session_state.forecast_engine
 
 def get_theme_palette():
     """Return color palette based on configured Streamlit theme."""
-    base_theme = st.get_option("theme.base") or "light"
+    try:
+        base_theme = st.get_option("theme.base") or "light"
+    except Exception:
+        # Fallback if theme option is not available
+        base_theme = "light"
+    
     if base_theme.lower() == "dark":
         return {
             "background": "#0f172a",
-            "surface": "#111827",
+            "surface": "#1e293b",
             "card": "#1f2937",
-            "border": "#1f2937",
+            "border": "#334155",
             "text": "#f8fafc",
-            "muted": "#94a3b8",
-            "accent": "#38bdf8",
-            "accent_alt": "#6366f1",
-            "success_bg": "#073c2c",
-            "success_border": "#22c55e",
-            "info_bg": "#1e1b4b",
-            "info_border": "#818cf8",
-            "warning_bg": "#3b1d0b",
-            "warning_border": "#fb923c",
-            "grid": "#253044",
+            "muted": "#cbd5e1",
+            "accent": "#60a5fa",
+            "accent_alt": "#818cf8",
+            "success_bg": "#064e3b",
+            "success_border": "#34d399",
+            "info_bg": "#1e3a8a",
+            "info_border": "#60a5fa",
+            "warning_bg": "#78350f",
+            "warning_border": "#fbbf24",
+            "grid": "#334155",
+            "plot_bg": "#1e293b",
+            "paper_bg": "#1e293b",
         }
     return {
         "background": "#f4f6fb",
@@ -448,10 +463,15 @@ def get_theme_palette():
         "warning_bg": "#fff7ed",
         "warning_border": "#fb923c",
         "grid": "#d0d7e3",
+        "plot_bg": "#ffffff",
+        "paper_bg": "#ffffff",
     }
 
 
-PALETTE = get_theme_palette()
+# Get current palette dynamically
+def get_palette():
+    """Get current theme palette - call this instead of using PALETTE directly."""
+    return get_theme_palette()
 
 
 def hex_to_rgba(hex_color, alpha=1.0):
@@ -465,33 +485,45 @@ def hex_to_rgba(hex_color, alpha=1.0):
     return f"rgba({r},{g},{b},{alpha})"
 
 
-def apply_chart_theme(fig, palette=PALETTE, height=400):
+def apply_chart_theme(fig, palette=None, height=400):
     """Apply consistent styling to Plotly charts."""
+    if palette is None:
+        palette = get_palette()
+    
+    # Use plot_bg and paper_bg if available, otherwise fall back to surface
+    plot_bg = palette.get("plot_bg", palette["surface"])
+    paper_bg = palette.get("paper_bg", palette["surface"])
+    
     fig.update_layout(
         height=height,
-        plot_bgcolor=palette["surface"],
-        paper_bgcolor=palette["surface"],
-        font=dict(color=palette["text"]),
+        plot_bgcolor=plot_bg,
+        paper_bgcolor=paper_bg,
+        font=dict(color=palette["text"], size=12),
         hovermode="x unified",
         legend=dict(
-            bgcolor=palette["surface"],
+            bgcolor=paper_bg,
             bordercolor=palette["border"],
             borderwidth=1,
             font=dict(color=palette["text"]),
         ),
         margin=dict(l=20, r=20, t=60, b=40),
+        title=dict(font=dict(color=palette["text"])),
     )
     fig.update_xaxes(
         showgrid=True,
         gridcolor=palette["grid"],
-        linecolor=palette["grid"],
+        linecolor=palette["border"],
         zeroline=False,
+        showline=True,
+        title=dict(font=dict(color=palette["text"])),
     )
     fig.update_yaxes(
         showgrid=True,
         gridcolor=palette["grid"],
-        linecolor=palette["grid"],
+        linecolor=palette["border"],
         zeroline=False,
+        showline=True,
+        title=dict(font=dict(color=palette["text"])),
     )
     return fig
 
@@ -525,7 +557,8 @@ def render_section_heading(title, icon="insights"):
     )
 
 
-# Custom CSS with improved design
+# Custom CSS with improved design - regenerated on each render to support theme switching
+PALETTE = get_palette()  # Get current palette
 st.markdown(
     f"""
     <style>
@@ -816,7 +849,8 @@ if page == "Dashboard":
                     df_forecast = pd.DataFrame(forecast_data)
                     df_forecast["date"] = pd.to_datetime(df_forecast["date"])
 
-                    # Display forecast chart
+                    # Display forecast chart - get fresh palette for current theme
+                    current_palette = get_palette()
                     fig = go.Figure()
 
                     fig.add_trace(
@@ -825,7 +859,7 @@ if page == "Dashboard":
                             y=df_forecast["forecast"],
                             mode="lines",
                             name="Forecast",
-                            line=dict(color=PALETTE["accent"], width=3),
+                            line=dict(color=current_palette["accent"], width=3),
                         )
                     )
 
@@ -835,7 +869,7 @@ if page == "Dashboard":
                             y=df_forecast["upper_bound"],
                             mode="lines",
                             name="Upper Bound",
-                            line=dict(color=PALETTE["accent_alt"], width=1),
+                            line=dict(color=current_palette["accent_alt"], width=1),
                             showlegend=False,
                         )
                     )
@@ -847,8 +881,8 @@ if page == "Dashboard":
                             mode="lines",
                             name="Lower Bound",
                             fill="tonexty",
-                            fillcolor=hex_to_rgba(PALETTE["accent"], 0.12),
-                            line=dict(color=PALETTE["accent_alt"], width=1),
+                            fillcolor=hex_to_rgba(current_palette["accent"], 0.12),
+                            line=dict(color=current_palette["accent_alt"], width=1),
                             showlegend=False,
                         )
                     )
@@ -899,6 +933,7 @@ if page == "Dashboard":
         with col1:
             # Demand by center
             if "CENTER NAME" in forecast_engine.data.columns and "PAY WEIGHT" in forecast_engine.data.columns:
+                current_palette = get_palette()
                 center_demand = forecast_engine.data.groupby("CENTER NAME")["PAY WEIGHT"].sum().reset_index()
                 center_demand = center_demand.sort_values("PAY WEIGHT", ascending=False)
 
@@ -908,14 +943,15 @@ if page == "Dashboard":
                     y="PAY WEIGHT",
                     title="Total Demand by Center",
                     labels={"PAY WEIGHT": "Demand (kg)", "CENTER NAME": "Center"},
-                    color_discrete_sequence=[PALETTE["accent"]],
+                    color_discrete_sequence=[current_palette["accent"]],
                 )
-                fig_center.update_traces(marker_line_color=PALETTE["accent_alt"], marker_line_width=1)
+                fig_center.update_traces(marker_line_color=current_palette["accent_alt"], marker_line_width=1)
                 st.plotly_chart(apply_chart_theme(fig_center), width="stretch")
 
         with col2:
             # Demand by item
             if "ITEM" in forecast_engine.data.columns and "PAY WEIGHT" in forecast_engine.data.columns:
+                current_palette = get_palette()
                 item_demand = forecast_engine.data.groupby("ITEM")["PAY WEIGHT"].sum().reset_index()
                 item_demand = item_demand.sort_values("PAY WEIGHT", ascending=False).head(10)
 
@@ -926,9 +962,9 @@ if page == "Dashboard":
                     orientation="h",
                     title="Top 10 Items by Demand",
                     labels={"PAY WEIGHT": "Demand (kg)", "ITEM": "Item"},
-                    color_discrete_sequence=[PALETTE["accent"]],
+                    color_discrete_sequence=[current_palette["accent"]],
                 )
-                fig_item.update_traces(marker_line_color=PALETTE["accent_alt"], marker_line_width=1)
+                fig_item.update_traces(marker_line_color=current_palette["accent_alt"], marker_line_width=1)
                 st.plotly_chart(apply_chart_theme(fig_item), width="stretch")
 
         if {"DATE", "PAY WEIGHT"}.issubset(forecast_engine.data.columns):
@@ -957,6 +993,7 @@ if page == "Dashboard":
                 )
 
                 if not weekday_summary.empty:
+                    current_palette = get_palette()
                     weekday_summary = weekday_summary.rename(columns={"PAY WEIGHT": "Average Demand"})
                     fig_weekday = px.line(
                         weekday_summary,
@@ -964,7 +1001,7 @@ if page == "Dashboard":
                         y="Average Demand",
                         title="Average Demand by Weekday",
                         markers=True,
-                        color_discrete_sequence=[PALETTE["accent"]],
+                        color_discrete_sequence=[current_palette["accent"]],
                     )
                     st.plotly_chart(apply_chart_theme(fig_weekday, height=380), width="stretch")
 
@@ -1026,6 +1063,7 @@ elif page == "Forecast Generator":
                                 df_forecast["date"] = pd.to_datetime(df_forecast["date"])
 
                                 with st.expander(f"{item}"):
+                                    current_palette = get_palette()
                                     fig = go.Figure()
 
                                     fig.add_trace(
@@ -1034,7 +1072,7 @@ elif page == "Forecast Generator":
                                             y=df_forecast["forecast"],
                                             mode="lines+markers",
                                             name="Forecast",
-                                            line=dict(color=PALETTE["accent"], width=2),
+                                            line=dict(color=current_palette["accent"], width=2),
                                         )
                                     )
 
@@ -1044,7 +1082,7 @@ elif page == "Forecast Generator":
                                             y=df_forecast["upper_bound"],
                                             mode="lines",
                                             name="Upper Bound",
-                                            line=dict(color=PALETTE["accent_alt"], dash="dash"),
+                                            line=dict(color=current_palette["accent_alt"], dash="dash"),
                                             showlegend=True,
                                         )
                                     )
@@ -1056,8 +1094,8 @@ elif page == "Forecast Generator":
                                             mode="lines",
                                             name="Lower Bound",
                                             fill="tonexty",
-                                            fillcolor=hex_to_rgba(PALETTE["accent"], 0.12),
-                                            line=dict(color=PALETTE["accent_alt"], dash="dash"),
+                                            fillcolor=hex_to_rgba(current_palette["accent"], 0.12),
+                                            line=dict(color=current_palette["accent_alt"], dash="dash"),
                                             showlegend=True,
                                         )
                                     )
@@ -1211,6 +1249,7 @@ elif page == "Data Analyzer":
                     ].copy()
 
                     if not filtered_df.empty:
+                        current_palette = get_palette()
                         filtered_df["MonthStart"] = pd.to_datetime(filtered_df["Month"])
 
                         fig_uploaded = go.Figure()
@@ -1220,7 +1259,7 @@ elif page == "Data Analyzer":
                                 y=filtered_df["Forecast"],
                                 name="Forecast",
                                 mode="lines+markers",
-                                line=dict(color=PALETTE["accent"], width=3),
+                                line=dict(color=current_palette["accent"], width=3),
                             )
                         )
                         fig_uploaded.add_trace(
@@ -1228,7 +1267,7 @@ elif page == "Data Analyzer":
                                 x=filtered_df["MonthStart"],
                                 y=filtered_df["UpperBound"],
                                 name="Upper Bound",
-                                line=dict(color=PALETTE["accent_alt"], dash="dot"),
+                                line=dict(color=current_palette["accent_alt"], dash="dot"),
                             )
                         )
                         fig_uploaded.add_trace(
@@ -1237,8 +1276,8 @@ elif page == "Data Analyzer":
                                 y=filtered_df["LowerBound"],
                                 name="Lower Bound",
                                 fill="tonexty",
-                                fillcolor=hex_to_rgba(PALETTE["accent"], 0.12),
-                                line=dict(color=PALETTE["accent_alt"], dash="dot"),
+                                fillcolor=hex_to_rgba(current_palette["accent"], 0.12),
+                                line=dict(color=current_palette["accent_alt"], dash="dot"),
                             )
                         )
                         fig_uploaded.update_layout(
@@ -1297,6 +1336,7 @@ elif page == "Analytics":
             forecast_engine.data["DATE"] = pd.to_datetime(forecast_engine.data["DATE"])
 
             # Monthly trends
+            current_palette = get_palette()
             forecast_engine.data["Month"] = forecast_engine.data["DATE"].dt.to_period("M")
             monthly_demand = forecast_engine.data.groupby("Month")["PAY WEIGHT"].sum().reset_index()
             monthly_demand["Month"] = monthly_demand["Month"].astype(str)
@@ -1307,7 +1347,7 @@ elif page == "Analytics":
                 y="PAY WEIGHT",
                 title="Monthly Demand Trends",
                 labels={"PAY WEIGHT": "Demand (kg)", "Month": "Month"},
-                color_discrete_sequence=[PALETTE["accent"]],
+                color_discrete_sequence=[current_palette["accent"]],
             )
             st.plotly_chart(apply_chart_theme(fig_monthly), width="stretch")
 
@@ -1316,6 +1356,7 @@ elif page == "Analytics":
                 pivot_data = forecast_engine.data.groupby(["CENTER NAME", "ITEM"])["PAY WEIGHT"].sum().reset_index()
                 pivot_table = pivot_data.pivot(index="CENTER NAME", columns="ITEM", values="PAY WEIGHT").fillna(0)
 
+                current_palette = get_palette()
                 st.subheader("Center-Item Demand Matrix")
                 fig_heatmap = px.imshow(
                     pivot_table,
@@ -1323,9 +1364,9 @@ elif page == "Analytics":
                     title="Demand Heatmap: Center vs Item",
                     aspect="auto",
                     color_continuous_scale=[
-                        [0.0, PALETTE["surface"]],
-                        [0.5, PALETTE["accent_alt"]],
-                        [1.0, PALETTE["accent"]],
+                        [0.0, current_palette["surface"]],
+                        [0.5, current_palette["accent_alt"]],
+                        [1.0, current_palette["accent"]],
                     ],
                 )
                 st.plotly_chart(apply_chart_theme(fig_heatmap, height=600), width="stretch")
